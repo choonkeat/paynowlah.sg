@@ -40,31 +40,49 @@ export async function renderPaymentImage(details: PaymentDetails): Promise<strin
   ctx.fillRect(500 - logoWidth / 2 - 8, 380 - logoHeight / 2 - 8, logoWidth + 16, logoHeight + 16);
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(logo, 500 - logoWidth / 2, 380 - logoHeight / 2, logoWidth, logoHeight);
-  ctx.fillStyle = '#37123D';
-  ctx.font = '700 70px Arial, sans-serif';
-  ctx.fillText(`Pay ${formatRecipient(details)}`, 500, 790, 900);
-  ctx.font = '800 96px Arial, sans-serif';
-  ctx.fillText(details.amount ? `S$${details.amount}` : 'Any amount · SGD', 500, 888, 900);
-  ctx.font = '30px Arial, sans-serif';
-  ctx.fillStyle = '#6C6070';
-  if (details.reference) ctx.fillText(`Reference: ${details.reference}`, 500, 930, 900);
-  // Last line: "Expires … SGT · by paynowlah.sg", or just the credit when there is no expiry.
-  // Drawn piece by piece so the credit can be coloured, then centred as a whole.
-  const pieces: { text: string; font: string; color: string }[] = [];
+  // Only print what is set: no amount, reference or expiry means no line for it.
+  // Each line knows its gap from the previous one; the block is then centred in
+  // the space under the QR code (a full block sits at baselines 790 to 966).
+  type Piece = { text: string; font: string; color: string };
+  const lines: { pieces: Piece[]; advance: number; ascent: number; descent: number }[] = [];
+  const add = (pieces: Piece[], ascent: number, descent: number, gap: number) =>
+    lines.push({ pieces, ascent, descent, advance: lines.length ? lines[lines.length - 1]!.descent + gap + ascent : 0 });
+  add([{ text: `Pay ${formatRecipient(details)}`, font: '700 70px Arial, sans-serif', color: '#37123D' }], 52, 14, 14);
+  if (details.amount) add([{ text: `S$${details.amount}`, font: '800 96px Arial, sans-serif', color: '#37123D' }], 70, 8, 14);
+  if (details.reference) add([{ text: `Reference: ${details.reference}`, font: '30px Arial, sans-serif', color: '#6C6070' }], 22, 7, 12);
+  // Last line: "Expires ... SGT · by Paynowlah.sg", or just the credit when there is no expiry.
+  // The credit copies the site logo: dark "Paynow", pink "lah", regular weight for readability.
+  const last: Piece[] = [];
   if (details.expires) {
-    pieces.push({ text: `Expires ${new Date(details.expires).toLocaleString('en-SG', {
+    last.push({ text: `Expires ${new Date(details.expires).toLocaleString('en-SG', {
       timeZone: 'Asia/Singapore', day: 'numeric', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit', hour12: true,
     })} SGT · `, font: '26px Arial, sans-serif', color: '#6C6070' });
   }
-  pieces.push({ text: 'by paynowlah.sg', font: '700 26px Arial, sans-serif', color: '#E9208E' });
-  const widths = pieces.map(p => { ctx.font = p.font; return ctx.measureText(p.text).width; });
-  let x = 500 - widths.reduce((a, b) => a + b, 0) / 2;
+  const small = '26px Arial, sans-serif';
+  last.push(
+    { text: 'by ', font: small, color: '#6C6070' },
+    { text: 'Paynow', font: small, color: '#37123D' },
+    { text: 'lah', font: small, color: '#E9208E' },
+    { text: '.sg', font: small, color: '#37123D' },
+  );
+  add(last, 19, 6, 10);
+
+  const height = lines.reduce((sum, l) => sum + l.advance, 0) + lines[0]!.ascent + lines[lines.length - 1]!.descent;
+  let y = 856 - height / 2 + lines[0]!.ascent;
   ctx.textAlign = 'left';
-  pieces.forEach((p, i) => {
-    ctx.font = p.font; ctx.fillStyle = p.color;
-    ctx.fillText(p.text, x, 966);
-    x += widths[i]!;
-  });
+  for (const line of lines) {
+    y += line.advance;
+    // Pieces are drawn one by one (so the credit can be coloured) and centred as a whole.
+    const widths = line.pieces.map(p => { ctx.font = p.font; return ctx.measureText(p.text).width; });
+    const total = widths.reduce((a, b) => a + b, 0);
+    const squeeze = Math.min(1, 900 / total);
+    let x = 500 - (total * squeeze) / 2;
+    line.pieces.forEach((p, i) => {
+      ctx.font = p.font; ctx.fillStyle = p.color;
+      ctx.fillText(p.text, x, y, widths[i]! * squeeze);
+      x += widths[i]! * squeeze;
+    });
+  }
   return canvas.toDataURL('image/png');
 }

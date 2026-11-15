@@ -76,20 +76,27 @@ describe('finished decorated PNG, not just QR source text', () => {
     for (const text of [
       `Pay ${formatRecipient(details)}`,
       ...(details.reference ? [`Reference: ${details.reference}`] : []),
-      details.amount ? `S$${details.amount}` : 'Any amount · SGD',
+      ...(details.amount ? [`S$${details.amount}`] : []),
     ]) {
       expect(textCalls.some(c => c.text === text && c.y > 720 && c.y < image.height)).toBe(true);
     }
-    const credit = textCalls.find(c => c.text === 'by paynowlah.sg')!;
+    const credit = textCalls.find(c => c.text === 'lah')!;
+    const lastLine = textCalls.filter(c => c.y === credit.y);
+    expect(lastLine.map(c => c.text).join('')).toMatch(/(^| SGT · )by Paynowlah\.sg$/);
+    expect(credit.font).not.toMatch(/^[6-9]00 /);
     expect(credit.y).toBeLessThan(image.height);
-    expect(credit.y).toBeGreaterThan(textCalls.find(c => c.text.startsWith('S$') || c.text.startsWith('Any amount'))!.y);
+    expect(Math.max(...textCalls.filter(c => !lastLine.includes(c)).map(c => c.y))).toBeLessThan(credit.y);
+    // Unset details are left out, not printed as placeholders.
+    expect(textCalls.some(c => /Any amount|Reference: $/.test(c.text))).toBe(false);
+    expect(textCalls.some(c => c.text.startsWith('S$'))).toBe(Boolean(details.amount));
+    expect(textCalls.some(c => c.text.startsWith('Expires '))).toBe(Boolean(details.expires));
     expect(credit.font).toContain('26px');
     if (details.expires) expect(textCalls.find(c => c.text.startsWith('Expires '))!.text).toMatch(/ SGT · $/);
     expect(textCalls.find(c => c.text === `Pay ${formatRecipient(details)}`)?.font).toContain('70px');
     // Plain white behind the details: no tinted box.
     expect(panelRects).toHaveLength(0);
     expect(textCalls.find(c => c.text === `Pay ${formatRecipient(details)}`)!.top).toBeGreaterThanOrEqual(720);
-    expect(textCalls.find(c => c.text.startsWith('S$') || c.text.startsWith('Any amount'))?.font).toContain('96px');
+    if (details.amount) expect(textCalls.find(c => c.text.startsWith('S$'))?.font).toContain('96px');
     expect(textCalls.every(c => !/PayNow|SCAN TO PAY|PAY TO MOBILE|PAY TO UEN|fixed|editable/.test(c.text))).toBe(true);
     if (details.expires) {
       const expiryLine = textCalls.find(c => c.text.startsWith('Expires '))!;
