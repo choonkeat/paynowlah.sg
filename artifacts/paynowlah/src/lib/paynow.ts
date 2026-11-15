@@ -1,5 +1,5 @@
 export interface PaymentDetails {
-  type: 'mobile' | 'uen';
+  type: 'mobile' | 'uen' | 'nric';
   recipient: string;
   reference: string;
   amount?: string;
@@ -9,8 +9,8 @@ export interface PaymentDetails {
 }
 
 export function validatePayment(input: PaymentDetails): PaymentDetails {
-  if (input.type !== 'mobile' && input.type !== 'uen') {
-    throw new Error('Choose a mobile number or UEN.');
+  if (input.type !== 'mobile' && input.type !== 'uen' && input.type !== 'nric') {
+    throw new Error('Choose a mobile number, UEN or NRIC/FIN.');
   }
   let recipient = input.recipient.trim().replace(/[\s()-]/g, '');
   if (input.type === 'mobile') {
@@ -19,6 +19,11 @@ export function validatePayment(input: PaymentDetails): PaymentDetails {
       throw new Error('Enter an 8-digit Singapore mobile number starting with 8 or 9.');
     }
     recipient = `+65${recipient}`;
+  } else if (input.type === 'nric') {
+    recipient = recipient.toUpperCase();
+    if (!/^[STFGM]\d{7}[A-Z]$/.test(recipient)) {
+      throw new Error('Enter a full NRIC or FIN: a letter, 7 digits, then a letter (like S1234567D).');
+    }
   } else {
     recipient = recipient.toUpperCase();
     // Business, company and other registered-entity UEN formats, with optional PayNow suffix.
@@ -78,6 +83,8 @@ export function buildPaymentParams(input: PaymentDetails): URLSearchParams {
 
 export function formatRecipient(details: PaymentDetails): string {
   if (details.type === 'uen') return details.recipient;
+  // Only the last 4 characters, so a shared picture does not expose the full NRIC/FIN.
+  if (details.type === 'nric') return `${details.recipient[0]}****${details.recipient.slice(-4)}`;
   const digits = details.recipient.replace(/^\+65/, '');
   return `+65 ${digits.slice(0, 4)} ${digits.slice(4)}`;
 }
@@ -108,7 +115,7 @@ export function buildPayload(input: PaymentDetails): string {
   const expiry = details.expires === undefined ? '' :
     new Date(details.expires + 8 * 3600_000).toISOString().slice(0, 19).replace(/\D/g, '');
   const merchant = tlv('00', 'SG.PAYNOW') +
-    tlv('01', details.type === 'mobile' ? '0' : '2') +
+    tlv('01', details.type === 'mobile' ? '0' : details.type === 'nric' ? '1' : '2') +
     tlv('02', details.recipient) + tlv('03', details.editable ? '1' : '0') +
     (expiry ? tlv('04', expiry) : '');
   const payload = tlv('00', '01') + tlv('01', '11') + tlv('26', merchant) +

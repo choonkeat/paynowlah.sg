@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildPayload, buildPaymentParams, crc16, isExpired, parsePayment,
+  buildPayload, buildPaymentParams, crc16, formatRecipient, isExpired, parsePayment,
   validatePayment, type PaymentDetails,
 } from '../src/lib/paynow';
 import { externalChecksumExamples, externalWithReference, externalWithoutReference, fields, independentCrc } from './fixtures';
@@ -140,5 +140,26 @@ describe('invalid input fails explicitly', () => {
   it('rejects invalid query flags and recipient types', () => {
     expect(() => parsePayment('?recipient=12345678A&type=uen&editable=maybe')).toThrow();
     expect(() => parsePayment('?recipient=12345678A&type=bank')).toThrow();
+  });
+});
+
+describe('NRIC/FIN payees', () => {
+  it('encodes PayNow proxy type 1 with the full, upper-cased NRIC/FIN', () => {
+    const paynow = fields(fields(buildPayload({ ...base, type: 'nric', recipient: ' s1234567d ' }))['26']!);
+    expect(paynow['01']).toBe('1');
+    expect(paynow['02']).toBe('S1234567D');
+  });
+  it.each(['S1234567D', 'T0123456Z', 'F1234567N', 'G7654321K', 'M1234567K'])('accepts %s', (recipient) => {
+    expect(validatePayment({ ...base, type: 'nric', recipient }).recipient).toBe(recipient);
+  });
+  it.each(['1234567D', 'S123456D', 'S12345678D', 'A1234567D', 'S1234567', 'S 1234567 D!'])('rejects %s', (recipient) => {
+    expect(() => validatePayment({ ...base, type: 'nric', recipient })).toThrow(/NRIC or FIN/);
+  });
+  it('shows only the last 4 characters on screen and in the picture', () => {
+    expect(formatRecipient({ ...base, type: 'nric', recipient: 'S1234567D' })).toBe('S****567D');
+  });
+  it('round-trips through the link', () => {
+    const input = validatePayment({ ...base, type: 'nric', recipient: 'S1234567D' });
+    expect(parsePayment(buildPaymentParams(input).toString())).toEqual(input);
   });
 });

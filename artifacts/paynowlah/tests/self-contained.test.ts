@@ -40,17 +40,17 @@ describe('self-hosted assets', () => {
     }
   });
 
-  it('only ships the four necessary browser libraries', () => {
+  it('only ships the five necessary browser libraries', () => {
     const browserLibraries = new Set<string>();
     for (const file of sources(new URL('src/', root))) {
       if (!/\.tsx?$/.test(file.pathname)) continue;
       const source = readFileSync(file, 'utf8');
-      for (const [, name] of source.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)) {
+      for (const [, name] of source.matchAll(/(?:\bfrom\s*|^import\s*|\bimport\(\s*)['"]([^'"]+)['"]/gm)) {
         if (!name.startsWith('.') && !name.startsWith('@/')) {
           browserLibraries.add(name.split('/')[0]);
         }
       }
     }
-    expect([...browserLibraries].sort()).toEqual(['lucide-react', 'qrcode', 'react', 'react-dom']);
+    expect([...browserLibraries].sort()).toEqual(['lucide-react', 'qrcode', 'react', 'react-dom', 'zxing-wasm']);
   });
 });
