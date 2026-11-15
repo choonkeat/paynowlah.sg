@@ -74,15 +74,21 @@ describe('finished decorated PNG, not just QR source text', () => {
     // The overlay and labels are painted into the actual exported canvas.
     expect(imageCalls.some(args => args.length === 4 && args[2] === 280 && args[3]! > 170)).toBe(true);
     for (const text of [
-      formatRecipient(details),
+      `Pay ${formatRecipient(details)}`,
       ...(details.reference ? [`Reference: ${details.reference}`] : []),
       details.amount ? `S$${details.amount}` : 'Any amount · SGD',
     ]) {
-      expect(textCalls.some(c => c.text === text && c.y > 760 && c.y < image.height)).toBe(true);
+      expect(textCalls.some(c => c.text === text && c.y > 720 && c.y < image.height)).toBe(true);
     }
-    expect(textCalls.find(c => c.text === formatRecipient(details))?.font).toContain('70px');
-    expect(panelRects).toHaveLength(1);
-    expect(textCalls.find(c => c.text === formatRecipient(details))!.top - panelRects[0]!.y).toBeGreaterThanOrEqual(12);
+    const credit = textCalls.find(c => c.text === 'by paynowlah.sg')!;
+    expect(credit.y).toBeLessThan(image.height);
+    expect(credit.y).toBeGreaterThan(textCalls.find(c => c.text.startsWith('S$') || c.text.startsWith('Any amount'))!.y);
+    expect(credit.font).toContain('26px');
+    if (details.expires) expect(textCalls.find(c => c.text.startsWith('Expires '))!.text).toMatch(/ SGT · $/);
+    expect(textCalls.find(c => c.text === `Pay ${formatRecipient(details)}`)?.font).toContain('70px');
+    // Plain white behind the details: no tinted box.
+    expect(panelRects).toHaveLength(0);
+    expect(textCalls.find(c => c.text === `Pay ${formatRecipient(details)}`)!.top).toBeGreaterThanOrEqual(720);
     expect(textCalls.find(c => c.text.startsWith('S$') || c.text.startsWith('Any amount'))?.font).toContain('96px');
     expect(textCalls.every(c => !/PayNow|SCAN TO PAY|PAY TO MOBILE|PAY TO UEN|fixed|editable/.test(c.text))).toBe(true);
     if (details.expires) {

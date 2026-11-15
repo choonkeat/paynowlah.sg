@@ -40,22 +40,31 @@ export async function renderPaymentImage(details: PaymentDetails): Promise<strin
   ctx.fillRect(500 - logoWidth / 2 - 8, 380 - logoHeight / 2 - 8, logoWidth + 16, logoHeight + 16);
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(logo, 500 - logoWidth / 2, 380 - logoHeight / 2, logoWidth, logoHeight);
-  ctx.fillStyle = '#F5EFF7';
-  ctx.fillRect(24, 720, 952, 256);
   ctx.fillStyle = '#37123D';
   ctx.font = '700 70px Arial, sans-serif';
-  ctx.fillText(formatRecipient(details), 500, 790, 900);
+  ctx.fillText(`Pay ${formatRecipient(details)}`, 500, 790, 900);
   ctx.font = '800 96px Arial, sans-serif';
   ctx.fillText(details.amount ? `S$${details.amount}` : 'Any amount · SGD', 500, 888, 900);
   ctx.font = '30px Arial, sans-serif';
   ctx.fillStyle = '#6C6070';
   if (details.reference) ctx.fillText(`Reference: ${details.reference}`, 500, 930, 900);
+  // Last line: "Expires … SGT · by paynowlah.sg", or just the credit when there is no expiry.
+  // Drawn piece by piece so the credit can be coloured, then centred as a whole.
+  const pieces: { text: string; font: string; color: string }[] = [];
   if (details.expires) {
-    ctx.font = '22px Arial, sans-serif';
-    ctx.fillText(`Expires ${new Date(details.expires).toLocaleString('en-SG', {
+    pieces.push({ text: `Expires ${new Date(details.expires).toLocaleString('en-SG', {
       timeZone: 'Asia/Singapore', day: 'numeric', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit', hour12: true,
-    })} SGT`, 500, 966, 900);
+    })} SGT · `, font: '26px Arial, sans-serif', color: '#6C6070' });
   }
+  pieces.push({ text: 'by paynowlah.sg', font: '700 26px Arial, sans-serif', color: '#E9208E' });
+  const widths = pieces.map(p => { ctx.font = p.font; return ctx.measureText(p.text).width; });
+  let x = 500 - widths.reduce((a, b) => a + b, 0) / 2;
+  ctx.textAlign = 'left';
+  pieces.forEach((p, i) => {
+    ctx.font = p.font; ctx.fillStyle = p.color;
+    ctx.fillText(p.text, x, 966);
+    x += widths[i]!;
+  });
   return canvas.toDataURL('image/png');
 }

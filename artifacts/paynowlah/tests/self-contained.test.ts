@@ -24,7 +24,9 @@ describe('self-hosted assets', () => {
       const source = readFileSync(file, 'utf8')
         // SVG namespace identifiers do not make network requests.
         .replaceAll('http://www.w3.org/2000/svg', '')
-        .replaceAll('http://www.w3.org/1999/xlink', '');
+        .replaceAll('http://www.w3.org/1999/xlink', '')
+        // A plain link to the source code; clicking it is the only way it loads.
+        .replaceAll("'https://github.com/choonkeat/paynowlah.sg'", '');
       expect(source).not.toMatch(/https?:\/\//i);
       expect(source).not.toMatch(/(?:src|href)\s*=\s*["']\/\//i);
       expect(source).not.toMatch(/(?:url|@import)\s*\(?\s*["']?\/\//i);
