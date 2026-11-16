@@ -10,6 +10,7 @@ import {
   type PaymentDetails,
 } from '@/lib/paynow';
 import { renderPaymentImage } from '@/lib/qr-image';
+import { DRAFT_MARKER, draftFromDetails, draftFromParams, draftToHash, emptyDraft, type Draft, type ExpiryUnit } from '@/lib/draft';
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '') + '/';
 
@@ -76,15 +77,22 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-type ExpiryUnit = 'none' | 'hours' | 'days' | 'keep';
-
 type Preview = { details: PaymentDetails | null; problem: string | null };
 
-function GeneratorForm({ initial, onPreview }: { initial?: PaymentDetails | null; onPreview?: (p: Preview) => void }) {
-  const [type, setType] = useState<PaymentDetails['type']>(initial?.type ?? 'mobile');
-  const [recipient, setRecipient] = useState(initial?.recipient ?? '');
+/** Keeps what is typed in the address (without adding Back-button steps), so a reload brings it back. */
+function saveDraft(draft: Draft) {
+  const hash = draftToHash(draft);
+  const url = hash ? `${BASE}#${hash}` : BASE;
+  if (url !== window.location.pathname + window.location.hash) window.history.replaceState(window.history.state, '', url);
+}
+
+function GeneratorForm({ initial, onPreview }: { initial?: Draft | null; onPreview?: (p: Preview) => void }) {
+  const start = initial ?? emptyDraft();
+  const keepExpires = start.unit === 'keep' ? start.expires : undefined;
+  const [type, setType] = useState<PaymentDetails['type']>(start.type);
+  const [recipient, setRecipient] = useState(start.recipient);
   // Check the payee once the person leaves the box or switches type, not on every keystroke.
-  const [checkRecipient, setCheckRecipient] = useState(!!initial);
+  const [checkRecipient, setCheckRecipient] = useState(!!start.recipient);
   const recipientError = useMemo(() => {
     if (!checkRecipient || !recipient.trim()) return null;
     try {
@@ -94,21 +102,25 @@ function GeneratorForm({ initial, onPreview }: { initial?: PaymentDetails | null
       return errMsg(err);
     }
   }, [checkRecipient, type, recipient]);
-  const [reference, setReference] = useState(initial?.reference ?? '');
-  const [amount, setAmount] = useState(initial?.amount ?? '');
-  const [editable, setEditable] = useState(initial ? initial.editable : false);
-  const [unit, setUnit] = useState<ExpiryUnit>(initial?.expires ? 'keep' : 'none');
-  const [count, setCount] = useState('24');
+  const [reference, setReference] = useState(start.reference);
+  const [amount, setAmount] = useState(start.amount);
+  const [editable, setEditable] = useState(start.editable);
+  const [unit, setUnit] = useState<ExpiryUnit>(keepExpires ? 'keep' : start.unit === 'keep' ? 'none' : start.unit);
+  const [count, setCount] = useState(start.count);
   const [error, setError] = useState<string | null>(null);
 
   const nonAscii = /[^\x20-\x7E]/.test(reference);
+
+  useEffect(() => {
+    saveDraft({ type, recipient, reference, amount, editable, unit, count, expires: keepExpires });
+  }, [type, recipient, reference, amount, editable, unit, count, keepExpires]);
 
   // Live preview: the same checks as "Make my QR link", run on every change.
   useEffect(() => {
     if (!onPreview) return;
     if (!recipient.trim()) { onPreview({ details: null, problem: null }); return; }
     let expires: number | undefined;
-    if (unit === 'keep') expires = initial?.expires;
+    if (unit === 'keep') expires = keepExpires;
     else if (unit !== 'none') {
       const n = Number(count);
       if (!Number.isInteger(n) || n <= 0) { onPreview({ details: null, problem: 'Expiry needs a whole number greater than zero.' }); return; }
@@ -124,13 +136,13 @@ function GeneratorForm({ initial, onPreview }: { initial?: PaymentDetails | null
     } catch (err) {
       onPreview({ details: null, problem: errMsg(err) });
     }
-  }, [onPreview, type, recipient, reference, amount, editable, unit, count, initial]);
+  }, [onPreview, type, recipient, reference, amount, editable, unit, count, keepExpires]);
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     let expires: number | undefined;
-    if (unit === 'keep') expires = initial?.expires;
+    if (unit === 'keep') expires = keepExpires;
     else if (unit !== 'none') {
       const n = Number(count);
       if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
@@ -149,10 +161,7 @@ function GeneratorForm({ initial, onPreview }: { initial?: PaymentDetails | null
         editable: hasAmount ? editable : true,
         expires,
       });
-      const url = shareUrl(details);
-      // Same link as now (e.g. "Edit" with no changes) fires no hashchange, so signal it ourselves.
-      if (url === window.location.href) window.dispatchEvent(new HashChangeEvent('hashchange'));
-      else window.location.assign(url);
+      window.location.assign(shareUrl(details));
     } catch (err) {
       setError(errMsg(err));
     }
@@ -226,7 +235,7 @@ function GeneratorForm({ initial, onPreview }: { initial?: PaymentDetails | null
           )}
           <select id="expiry-unit" value={unit} onChange={(e) => setUnit(e.target.value as ExpiryUnit)} className={`${field} flex-1`} data-testid="select-expiry-unit">
             <option value="none">Never expires</option>
-            {initial?.expires && <option value="keep">Keep current ({new Date(initial.expires).toLocaleString('en-SG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Singapore' }) + ' SGT'})</option>}
+            {keepExpires && <option value="keep">Keep current ({new Date(keepExpires).toLocaleString('en-SG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Singapore' }) + ' SGT'})</option>}
             <option value="hours">Hours from now</option>
             <option value="days">Days from now</option>
           </select>
@@ -249,7 +258,6 @@ function GeneratorForm({ initial, onPreview }: { initial?: PaymentDetails | null
 
 function PreviewCard({ preview }: { preview: Preview }) {
   const [img, setImg] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const { details, problem } = preview;
   useEffect(() => {
     setImg(null);
@@ -260,13 +268,6 @@ function PreviewCard({ preview }: { preview: Preview }) {
     }, 150);
     return () => { alive = false; clearTimeout(t); };
   }, [details]);
-
-  async function copy() {
-    if (!details) return;
-    await copyText(shareUrl(details));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
 
   return (
     <div className="pn-pop mx-auto w-full max-w-[19rem]" data-testid="card-preview">
@@ -283,10 +284,6 @@ function PreviewCard({ preview }: { preview: Preview }) {
           )}
         </div>
       </div>
-      <button type="button" onClick={copy} disabled={!details} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-bold text-accent-foreground transition hover:brightness-95 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/40" data-testid="button-preview-copy">
-        {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}{copied ? 'Copied' : 'Copy share link'}
-      </button>
-      <p className="sr-only" aria-live="polite">{copied ? 'Link copied to clipboard' : ''}</p>
     </div>
   );
 }
@@ -367,29 +364,34 @@ function ImportBox({ onImport }: { onImport: (details: PaymentDetails) => void }
   );
 }
 
-function FormPage({ initial }: { initial?: PaymentDetails | null }) {
+function FormPage({ initial }: { initial?: Draft | null }) {
   const [preview, setPreview] = useState<Preview>({ details: null, problem: null });
-  const [imported, setImported] = useState<{ details: PaymentDetails; n: number } | null>(null);
+  const [imported, setImported] = useState<{ draft: Draft; n: number } | null>(null);
+  // Opened with "Edit" on a QR page: offer the way back to it.
+  const fromResult = !!(window.history.state as { fromResult?: boolean } | null)?.fromResult;
   return (
-    <div className="grid items-start gap-10 pt-6 lg:grid-cols-[1.05fr_1fr] lg:gap-16 lg:pt-12">
-      <section className="pn-rise">
-        <p className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-accent">PayNow QR, in one link</p>
-        <h1 className="mt-3 text-[clamp(2.5rem,7vw,4.6rem)] font-extrabold leading-[0.95] tracking-tight">
-          {initial ? 'Tweak it, then' : 'Pay & Get Paid'}
-          <span className={`block text-primary ${initial ? '' : 'mt-4 text-[clamp(1.25rem,3vw,1.75rem)] font-bold leading-snug tracking-normal'}`}>{initial ? 'share again.' : 'Correctly & easily with a prefilled Paynow QR'}</span>
-        </h1>
-        <p className="mt-5 max-w-md text-lg text-muted-foreground">Correct amount. Correct reference text. Save into Photos app for reuse.</p>
-        <div className="mt-10 hidden lg:block"><PreviewCard preview={preview} /></div>
-        <ul className="mt-10 hidden gap-3 text-sm lg:grid">
-          <li className="flex gap-2"><ShieldCheck className="h-4 w-4 shrink-0 text-accent" aria-hidden />Your details live only in the link and your browser.</li>
-          <li className="flex gap-2"><ShieldCheck className="h-4 w-4 shrink-0 text-accent" aria-hidden />The payer&rsquo;s bank app shows the real recipient name before they pay.</li>
-        </ul>
-      </section>
-      <div>
-        <ImportBox onImport={(details) => setImported((prev) => ({ details, n: (prev?.n ?? 0) + 1 }))} />
-        <GeneratorForm key={imported?.n ?? 0} initial={imported?.details ?? initial} onPreview={setPreview} />
+    <>
+      {fromResult && <button onClick={() => window.history.back()} className="mt-4 inline-flex items-center gap-1.5 rounded-lg text-sm font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="button-cancel-edit"><ArrowLeft className="h-4 w-4" aria-hidden />Back to QR</button>}
+      <div className="grid items-start gap-10 pt-6 lg:grid-cols-[1.05fr_1fr] lg:gap-16 lg:pt-12">
+        <section className="pn-rise">
+          <p className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-accent">PayNow QR, in one link</p>
+          <h1 className="mt-3 text-[clamp(2.5rem,7vw,4.6rem)] font-extrabold leading-[0.95] tracking-tight">
+            {fromResult ? 'Tweak it, then' : 'Pay & Get Paid'}
+            <span className={`block text-primary ${fromResult ? '' : 'mt-4 text-[clamp(1.25rem,3vw,1.75rem)] font-bold leading-snug tracking-normal'}`}>{fromResult ? 'share again.' : 'Correctly & easily with a prefilled Paynow QR'}</span>
+          </h1>
+          <p className="mt-5 max-w-md text-lg text-muted-foreground">Correct amount. Correct reference text. Save into Photos app for reuse.</p>
+          <div className="mt-10 hidden lg:block"><PreviewCard preview={preview} /></div>
+          <ul className="mt-10 hidden gap-3 text-sm lg:grid">
+            <li className="flex gap-2"><ShieldCheck className="h-4 w-4 shrink-0 text-accent" aria-hidden />Your details live only in the link and your browser.</li>
+            <li className="flex gap-2"><ShieldCheck className="h-4 w-4 shrink-0 text-accent" aria-hidden />The payer&rsquo;s bank app shows the real recipient name before they pay.</li>
+          </ul>
+        </section>
+        <div>
+          <ImportBox onImport={(details) => setImported((prev) => ({ draft: draftFromDetails(details), n: (prev?.n ?? 0) + 1 }))} />
+          <GeneratorForm key={imported?.n ?? 0} initial={imported?.draft ?? initial} onPreview={setPreview} />
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -397,7 +399,6 @@ function ResultPage({ details }: { details: PaymentDetails }) {
   const [img, setImg] = useState<string | null>(null);
   const [imgErr, setImgErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [editing, setEditing] = useState(false);
   const [, tick] = useState(0);
   const expired = isExpired(details);
   useEffect(() => {
@@ -422,13 +423,9 @@ function ResultPage({ details }: { details: PaymentDetails }) {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  if (editing) {
-    return (
-      <div>
-        <button onClick={() => setEditing(false)} className="mt-4 inline-flex items-center gap-1.5 rounded-lg text-sm font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-testid="button-cancel-edit"><ArrowLeft className="h-4 w-4" aria-hidden />Back to QR</button>
-        <FormPage initial={details} />
-      </div>
-    );
+  function edit() {
+    window.history.pushState({ fromResult: true }, '', `${BASE}#${draftToHash(draftFromDetails(details))}`);
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
   }
 
   const fname = `paynow-${details.reference.replace(/[^a-z0-9]+/gi, '-').toLowerCase().replace(/^-|-$/g, '') || 'qr'}.png`;
@@ -487,7 +484,7 @@ function ResultPage({ details }: { details: PaymentDetails }) {
           <button onClick={copy} className={`${btn} bg-accent text-accent-foreground hover:brightness-95`} data-testid="button-copy-url">
             {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}{copied ? 'Copied' : 'Copy link'}
           </button>
-          <button onClick={() => setEditing(true)} className={`${btn} border border-input bg-card hover:border-primary`} data-testid="button-edit"><Pencil className="h-4 w-4" aria-hidden />Edit</button>
+          <button onClick={edit} className={`${btn} border border-input bg-card hover:border-primary`} data-testid="button-edit"><Pencil className="h-4 w-4" aria-hidden />Edit</button>
           <a href={BASE} className={`${btn} border border-input bg-card hover:border-primary`} data-testid="button-start-over"><RotateCcw className="h-4 w-4" aria-hidden />Start over</a>
         </div>
         <p className="sr-only" aria-live="polite">{copied ? 'Link copied to clipboard' : ''}</p>
@@ -531,16 +528,18 @@ export default function Home() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
   const parsed = useMemo(() => {
+    const params = new URLSearchParams(query);
+    if (params.has(DRAFT_MARKER)) return { details: null, draft: draftFromParams(params), error: null };
     try {
-      return { details: parsePayment(query ? `?${query}` : ''), error: null as string | null };
+      return { details: parsePayment(query ? `?${query}` : ''), draft: null, error: null as string | null };
     } catch (e) {
-      return { details: null, error: errMsg(e) };
+      return { details: null, draft: null, error: errMsg(e) };
     }
   }, [query]);
 
   return (
     <Shell>
-      {parsed.error ? <BadLink message={parsed.error} /> : parsed.details ? <ResultPage key={`${visit}:${query}`} details={parsed.details} /> : <FormPage />}
+      {parsed.error ? <BadLink message={parsed.error} /> : parsed.details ? <ResultPage key={`${visit}:${query}`} details={parsed.details} /> : <FormPage key={visit} initial={parsed.draft} />}
     </Shell>
   );
 }
